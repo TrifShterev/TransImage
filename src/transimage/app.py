@@ -8,7 +8,7 @@ from PIL import Image, ImageOps, ImageTk
 
 from transimage.description import generate_and_show_description
 from transimage.fit import fit_image
-from transimage.platform_ui import accelerator_label, choose_font_family
+from transimage.platform_ui import choose_font_family
 
 _HEADER_BG = "#2b2b2b"
 _VIEWPORT_BG = "#111111"
@@ -98,37 +98,17 @@ class App:
         )
         self.generate_btn.place(x=140, rely=0.5, anchor=tk.W)
 
-        file_button = tk.Menubutton(
+        open_button = tk.Button(
             header,
-            text="File",
-            bg=_HEADER_BG,
-            fg="#ffffff",
-            activebackground="#3c3c3c",
-            activeforeground="#ffffff",
+            text="Open Image...",
+            bg=_HEADER_BG, fg="#ffffff",
+            activebackground="#3c3c3c", activeforeground="#ffffff",
             font=self.menu_font,
-            relief=tk.FLAT,
-            borderwidth=0,
-            highlightthickness=0,
-            padx=12,
-            pady=4,
-        )
-        file_button.place(relx=1.0, x=-8, rely=0.5, anchor=tk.E)
-        self.file_menu = tk.Menu(
-            file_button,
-            tearoff=0,
-            bg=_HEADER_BG,
-            fg="#ffffff",
-            activebackground="#3c3c3c",
-            activeforeground="#ffffff",
-            font=self.menu_font,
-        )
-        self.file_menu.add_command(
-            label="Open Image...",
-            accelerator=accelerator_label(),
+            relief=tk.FLAT, borderwidth=0,
+            padx=12, pady=4,
             command=self.open_image,
         )
-        self.file_menu.add_command(label="Exit", command=self.root.destroy)
-        file_button.configure(menu=self.file_menu)
+        open_button.place(relx=1.0, x=-8, rely=0.5, anchor=tk.E)
 
         self.viewport = tk.Canvas(
             self.root,
