@@ -18,9 +18,6 @@ Python, tkinter, and Pillow. Later AI goes through the `openrouter` package. The
 
 Use `uv`, `pyproject.toml`, `uv.lock`, and `.venv` only. Never add `requirements.txt`, `Pipfile`, or Poetry/PDM files.
 
-## Image rule
-
-Open one image at a time. The header stays reserved. The viewport fills the rest. Fit the whole image. Never change aspect ratio. Never crop or stretch.
 
 ## Launch
 

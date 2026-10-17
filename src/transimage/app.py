@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
@@ -5,6 +6,7 @@ from tkinter import filedialog, messagebox
 
 from PIL import Image, ImageOps, ImageTk
 
+from transimage.description import generate_and_show_description
 from transimage.fit import fit_image
 from transimage.platform_ui import accelerator_label, choose_font_family
 
@@ -83,6 +85,19 @@ class App:
         )
         wordmark.place(x=16, rely=0.5, anchor=tk.W)
 
+        self.generate_btn = tk.Button(
+            header,
+            text="Generate Description",
+            bg=_HEADER_BG, fg="#ffffff",
+            activebackground="#3c3c3c", activeforeground="#ffffff",
+            font=self.menu_font,
+            relief=tk.FLAT, borderwidth=0,
+            padx=12, pady=4,
+            state=tk.DISABLED,
+            command=self._on_generate_description,
+        )
+        self.generate_btn.place(x=140, rely=0.5, anchor=tk.W)
+
         file_button = tk.Menubutton(
             header,
             text="File",
@@ -156,12 +171,21 @@ class App:
         self.source_path = path
         self.source_image = source
         self.display_master = master
+        self.generate_btn.configure(state=tk.NORMAL)
         if self._mapped:
             self._paint()
 
     def _on_open_shortcut(self, _event: tk.Event) -> str:
         self.open_image()
         return "break"
+
+    def _on_generate_description(self) -> None:
+        generate_and_show_description(
+            self.root,
+            self.generate_btn,
+            self.display_master,
+            os.environ.get("OPENROUTER_API_KEY"),
+        )
 
     def _on_map(self, _event: tk.Event) -> None:
         self._mapped = True
