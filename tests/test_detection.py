@@ -3,7 +3,13 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from transimage.detection import parse_detections, prepare_detection_image
+from transimage.description import DEFAULT_MODEL, get_description_model
+from transimage.detection import (
+    DETECTION_MODEL,
+    get_detection_model,
+    parse_detections,
+    prepare_detection_image,
+)
 
 
 def _box_answer(top: float, bottom: float, left: float, right: float):
@@ -75,3 +81,27 @@ def test_prepare_detection_image_keeps_valid_image_unchanged() -> None:
     source = Image.new("RGB", (640, 480))
     result = prepare_detection_image(source)
     assert result.size == (640, 480)
+
+
+def test_description_model_env_override_and_default(monkeypatch) -> None:
+    monkeypatch.delenv("MODEL_DESCRIBE_IMAGE", raising=False)
+    assert get_description_model() == DEFAULT_MODEL
+    assert DEFAULT_MODEL == "qwen/qwen3-vl-235b-a22b-instruct"
+
+    monkeypatch.setenv("MODEL_DESCRIBE_IMAGE", "")
+    assert get_description_model() == DEFAULT_MODEL
+
+    monkeypatch.setenv("MODEL_DESCRIBE_IMAGE", "custom/describe-model")
+    assert get_description_model() == "custom/describe-model"
+
+
+def test_detection_model_env_override_and_default(monkeypatch) -> None:
+    monkeypatch.delenv("MODEL_DETECT_OBJECTS", raising=False)
+    assert get_detection_model() == DETECTION_MODEL
+    assert DETECTION_MODEL == "typesafe/jev-1.14"
+
+    monkeypatch.setenv("MODEL_DETECT_OBJECTS", "")
+    assert get_detection_model() == DETECTION_MODEL
+
+    monkeypatch.setenv("MODEL_DETECT_OBJECTS", "custom/decision-model")
+    assert get_detection_model() == "custom/decision-model"

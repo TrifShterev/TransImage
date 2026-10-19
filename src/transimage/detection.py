@@ -1,5 +1,6 @@
 import base64
 import math
+import os
 import threading
 from io import BytesIO
 
@@ -11,6 +12,10 @@ PRESENCE_THRESHOLD = 0.5
 _MIN_SIDE = 256
 _MAX_SIDE = 1568
 _MIN_PIXELS = 78_400
+
+
+def get_detection_model() -> str:
+    return os.environ.get("MODEL_DETECT_OBJECTS") or DETECTION_MODEL
 
 
 def prepare_detection_image(image: Image.Image) -> Image.Image:
@@ -57,7 +62,11 @@ def parse_detections(
 
 
 def detect_objects(
-    image: Image.Image, api_key: str, description: str, question: str
+    image: Image.Image,
+    api_key: str,
+    description: str,
+    question: str,
+    model: str | None = None,
 ) -> list[dict]:
     buf = BytesIO()
     prepared = prepare_detection_image(image)
@@ -70,9 +79,10 @@ def detect_objects(
         state.append(f"Image description: {description}")
     state.append({"type": "image_url", "image_url": {"url": data_url}})
 
+    resolved_model = model or get_detection_model()
     client = OpenRouter(api_key=api_key)
     response = client.alpha.decisions.create(
-        model=DETECTION_MODEL,
+        model=resolved_model,
         state=state,
         questions={
             "found": {
