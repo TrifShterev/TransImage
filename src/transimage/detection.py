@@ -7,6 +7,8 @@ from io import BytesIO
 from openrouter import OpenRouter
 from PIL import Image
 
+from transimage.request_limits import REQUEST_TIMEOUT_MS
+
 DETECTION_MODEL = "typesafe/jev-1.14"
 PRESENCE_THRESHOLD = 0.5
 _MIN_SIDE = 256
@@ -109,6 +111,8 @@ def detect_objects(
                 ),
             },
         },
+        timeout_ms=REQUEST_TIMEOUT_MS,
+        retries=None,
     )
     return parse_detections(response.answers, label=question)
 
@@ -127,6 +131,7 @@ def detect_objects_async(
             result = detect_objects(image, api_key, description, question)
             root.after(0, lambda: on_done(result))
         except Exception as exc:
-            root.after(0, lambda: on_error(str(exc)))
+            message = str(exc)
+            root.after(0, lambda: on_error(message))
 
     threading.Thread(target=_run, daemon=True).start()

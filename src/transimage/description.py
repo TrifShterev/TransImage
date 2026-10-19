@@ -7,6 +7,8 @@ from tkinter import messagebox
 from openrouter import OpenRouter
 from PIL.Image import Image
 
+from transimage.request_limits import REQUEST_TIMEOUT_MS
+
 DEFAULT_MODEL = "qwen/qwen3-vl-235b-a22b-instruct"
 
 
@@ -36,6 +38,8 @@ def describe_image(
             }
         ],
         max_tokens=2048,
+        timeout_ms=REQUEST_TIMEOUT_MS,
+        retries=None,
     )
     return response.choices[0].message.content
 
@@ -53,7 +57,8 @@ def describe_image_async(
             result = describe_image(image, api_key, prompt)
             root.after(0, lambda: on_done(result))
         except Exception as exc:
-            root.after(0, lambda: on_error(str(exc)))
+            message = str(exc)
+            root.after(0, lambda: on_error(message))
 
     threading.Thread(target=_run, daemon=True).start()
 

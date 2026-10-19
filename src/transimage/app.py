@@ -9,6 +9,7 @@ from PIL import Image, ImageOps, ImageTk
 from transimage.detection import detect_objects_async
 from transimage.description import generate_and_show_description
 from transimage.fit import fit_image
+from transimage.modify import modify_image_async
 from transimage.platform_ui import choose_font_family
 
 _HEADER_BG = "#2b2b2b"
@@ -116,6 +117,19 @@ class App:
         )
         self.detect_btn.place(x=330, rely=0.5, anchor=tk.W)
 
+        self.modify_btn = tk.Button(
+            header,
+            text="Modify image",
+            bg=_HEADER_BG, fg="#ffffff",
+            activebackground="#3c3c3c", activeforeground="#ffffff",
+            font=self.menu_font,
+            relief=tk.FLAT, borderwidth=0,
+            padx=12, pady=4,
+            state=tk.DISABLED,
+            command=self._on_modify_image,
+        )
+        self.modify_btn.place(x=510, rely=0.5, anchor=tk.W)
+
         open_button = tk.Button(
             header,
             text="Open Image...",
@@ -170,6 +184,7 @@ class App:
         self.source_image = source
         self.display_master = master
         self.generate_btn.configure(state=tk.NORMAL)
+        self.modify_btn.configure(state=tk.NORMAL)
         self.last_description = None
         self._detection_normalized = None
         self._update_detect_btn_state()
@@ -346,6 +361,151 @@ text="Find object",
             )
 
         detect_btn.configure(command=on_detect_click)
+
+    def _on_modify_image(self) -> None:
+        if self.display_master is None:
+            return
+        description = self.last_description or ""
+
+        panel = tk.Toplevel(self.root)
+        panel.title("Modify image")
+        panel.configure(bg=_HEADER_BG)
+        panel.transient(self.root)
+
+        width, height = 640, 520
+        parent_x = self.root.winfo_rootx() + max(
+            0, (self.root.winfo_width() - width) // 2
+        )
+        parent_y = self.root.winfo_rooty() + max(
+            0, (self.root.winfo_height() - height) // 2
+        )
+        panel.geometry(f"{width}x{height}+{parent_x}+{parent_y}")
+
+        area = tk.Frame(panel, bg=_HEADER_BG)
+        area.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        area.columnconfigure(0, weight=1)
+        area.rowconfigure(1, weight=1)
+        area.rowconfigure(5, weight=1)
+
+        tk.Label(
+            area,
+            text="Description (read-only):",
+            bg=_HEADER_BG,
+            fg="#ffffff",
+            font=self.menu_font,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
+
+        desc_view = scrolledtext.ScrolledText(
+            area,
+            wrap=tk.WORD,
+            font=self.menu_font,
+            bg="#1e1e1e",
+            fg="#ffffff",
+            relief=tk.FLAT,
+            state=tk.DISABLED,
+        )
+        desc_view.grid(row=1, column=0, sticky="nsew")
+        desc_view.configure(state=tk.NORMAL)
+        desc_view.insert("1.0", description or "No description generated.")
+        desc_view.configure(state=tk.DISABLED)
+
+        ttk.Separator(area, orient=tk.HORIZONTAL).grid(
+            row=2, column=0, sticky="ew", pady=10
+        )
+
+        tk.Label(
+            area,
+            text="Modification request:",
+            bg=_HEADER_BG,
+            fg="#ffffff",
+            font=self.menu_font,
+        ).grid(row=3, column=0, sticky="w", pady=(0, 4))
+
+        request_view = tk.Text(
+            area,
+            height=3,
+            wrap=tk.WORD,
+            font=self.menu_font,
+            bg="#1e1e1e",
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief=tk.FLAT,
+        )
+        request_view.grid(row=4, column=0, sticky="ew", pady=(0, 10))
+
+        apply_btn = tk.Button(
+            area,
+            text="Apply",
+            bg=_HEADER_BG, fg="#ffffff",
+            activebackground="#3c3c3c", activeforeground="#ffffff",
+            font=self.menu_font,
+            relief=tk.FLAT, borderwidth=0,
+            padx=16, pady=4,
+            command=None,
+        )
+        apply_btn.grid(row=5, column=0, sticky="nw", pady=(10, 0))
+
+        in_flight = [False]
+
+        def panel_alive() -> bool:
+            try:
+                return bool(panel.winfo_exists())
+            except tk.TclError:
+                return False
+
+        def on_apply_click() -> None:
+            if in_flight[0]:
+                return
+            api_key = os.environ.get("OPENROUTER_API_KEY")
+            if not api_key:
+                messagebox.showerror(
+                    "TransImage",
+                    "No API key configured.\n"
+                    "Set OPENROUTER_API_KEY in .env",
+                    parent=panel,
+                )
+                return
+            request = request_view.get("1.0", "end-1c").strip()
+            if not request:
+                messagebox.showerror(
+                    "Modify Image",
+                    "Please enter a modification request.",
+                    parent=panel,
+                )
+                return
+            image = self.display_master
+            snapshot_desc = self.last_description or ""
+            in_flight[0] = True
+            apply_btn.configure(text="Modifying...", state=tk.DISABLED)
+
+            def on_done(result) -> None:
+                in_flight[0] = False
+                if self.display_master is image:
+                    self.source_image = result
+                    self.display_master = make_display_master(result)
+                    self._detection_normalized = None
+                    self._paint()
+                    request_view.delete("1.0", "end")
+                if panel_alive():
+                    apply_btn.configure(text="Apply", state=tk.NORMAL)
+
+            def on_error(error_msg: str) -> None:
+                in_flight[0] = False
+                if panel_alive():
+                    apply_btn.configure(text="Apply", state=tk.NORMAL)
+                    messagebox.showerror("Error", error_msg, parent=panel)
+
+            modify_image_async(
+                self.root,
+                image,
+                api_key,
+                request,
+                snapshot_desc,
+                on_done,
+                on_error,
+            )
+
+        apply_btn.configure(command=on_apply_click)
 
     def _on_map(self, _event: tk.Event) -> None:
         self._mapped = True
