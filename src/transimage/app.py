@@ -2,10 +2,11 @@ import os
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from PIL import Image, ImageOps, ImageTk
 
+from transimage.detection import detect_objects_async
 from transimage.description import generate_and_show_description
 from transimage.fit import fit_image
 from transimage.platform_ui import choose_font_family
@@ -58,6 +59,10 @@ class App:
         self._mapped = False
         self._after_id: str | None = None
         self._seen_size: tuple[int, int] | None = None
+        self.last_description: str | None = None
+        self._detection_normalized: (
+            list[tuple[float, float, float, float, str]] | None
+        ) = None
         self._build()
 
     def _build(self) -> None:
@@ -97,6 +102,19 @@ class App:
             command=self._on_generate_description,
         )
         self.generate_btn.place(x=140, rely=0.5, anchor=tk.W)
+
+        self.detect_btn = tk.Button(
+            header,
+            text="Object Detection",
+            bg=_HEADER_BG, fg="#ffffff",
+            activebackground="#3c3c3c", activeforeground="#ffffff",
+            font=self.menu_font,
+            relief=tk.FLAT, borderwidth=0,
+            padx=12, pady=4,
+            state=tk.DISABLED,
+            command=self._on_object_detection,
+        )
+        self.detect_btn.place(x=330, rely=0.5, anchor=tk.W)
 
         open_button = tk.Button(
             header,
@@ -152,6 +170,9 @@ class App:
         self.source_image = source
         self.display_master = master
         self.generate_btn.configure(state=tk.NORMAL)
+        self.last_description = None
+        self._detection_normalized = None
+        self._update_detect_btn_state()
         if self._mapped:
             self._paint()
 
@@ -160,12 +181,171 @@ class App:
         return "break"
 
     def _on_generate_description(self) -> None:
+        master = self.display_master
         generate_and_show_description(
             self.root,
             self.generate_btn,
-            self.display_master,
+            master,
             os.environ.get("OPENROUTER_API_KEY"),
+            after_success=lambda result: self._on_description_done(master, result),
         )
+
+    def _on_description_done(self, master: Image.Image | None, result: str) -> None:
+        if self.display_master is not master:
+            return
+        self.last_description = result
+        self._detection_normalized = None
+        self._update_detect_btn_state()
+
+    def _update_detect_btn_state(self) -> None:
+        has_image = self.source_path is not None
+        has_desc = self.last_description is not None
+        self.detect_btn.configure(
+            state=tk.NORMAL if (has_image and has_desc) else tk.DISABLED
+        )
+
+    def _on_object_detection(self) -> None:
+        if self.display_master is None:
+            return
+        description = self.last_description or ""
+
+        panel = tk.Toplevel(self.root)
+        panel.title("Object Detection")
+        panel.configure(bg=_HEADER_BG)
+        panel.transient(self.root)
+
+        width, height = 640, 480
+        parent_x = self.root.winfo_rootx() + max(
+            0, (self.root.winfo_width() - width) // 2
+        )
+        parent_y = self.root.winfo_rooty() + max(
+            0, (self.root.winfo_height() - height) // 2
+        )
+        panel.geometry(f"{width}x{height}+{parent_x}+{parent_y}")
+
+        area = tk.Frame(panel, bg=_HEADER_BG)
+        area.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        area.columnconfigure(0, weight=1)
+        area.rowconfigure(1, weight=1)
+        area.rowconfigure(5, weight=1)
+
+        tk.Label(
+            area,
+            text="Description (read-only):",
+            bg=_HEADER_BG,
+            fg="#ffffff",
+            font=self.menu_font,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
+
+        desc_view = scrolledtext.ScrolledText(
+            area,
+            wrap=tk.WORD,
+            font=self.menu_font,
+            bg="#1e1e1e",
+            fg="#ffffff",
+            relief=tk.FLAT,
+            state=tk.DISABLED,
+        )
+        desc_view.grid(row=1, column=0, sticky="nsew")
+        desc_view.configure(state=tk.NORMAL)
+        desc_view.insert("1.0", description)
+        desc_view.configure(state=tk.DISABLED)
+
+        ttk.Separator(area, orient=tk.HORIZONTAL).grid(
+            row=2, column=0, sticky="ew", pady=10
+        )
+
+        tk.Label(
+            area,
+            text="Your question:",
+            bg=_HEADER_BG,
+            fg="#ffffff",
+            font=self.menu_font,
+        ).grid(row=3, column=0, sticky="w", pady=(0, 4))
+
+        question_view = tk.Text(
+            area,
+            height=3,
+            wrap=tk.WORD,
+            font=self.menu_font,
+            bg="#1e1e1e",
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief=tk.FLAT,
+        )
+        question_view.grid(row=4, column=0, sticky="ew", pady=(0, 10))
+
+        detect_btn = tk.Button(
+            area,
+text="Find object",
+            bg=_HEADER_BG, fg="#ffffff",
+            activebackground="#3c3c3c", activeforeground="#ffffff",
+            font=self.menu_font,
+            relief=tk.FLAT, borderwidth=0,
+            padx=16, pady=4,
+            command=None,
+        )
+        detect_btn.grid(row=5, column=0, sticky="nw", pady=(10, 0))
+
+        def panel_alive() -> bool:
+            try:
+                return bool(panel.winfo_exists())
+            except tk.TclError:
+                return False
+
+        def on_detect_click() -> None:
+            api_key = os.environ.get("OPENROUTER_API_KEY")
+            if not api_key:
+                messagebox.showerror(
+                    "TransImage",
+                    "No API key configured.\n"
+                    "Set OPENROUTER_API_KEY in .env",
+                    parent=panel,
+                )
+                return
+            question = question_view.get("1.0", "end-1c").strip()
+            if not question:
+                messagebox.showerror(
+                    "Object Detection",
+                    "Please enter a question.",
+                    parent=panel,
+                )
+                return
+            detect_btn.configure(text="Finding...", state=tk.DISABLED)
+
+            def on_done(result: list[dict]) -> None:
+                if not panel_alive():
+                    return
+                detect_btn.configure(text="Find object", state=tk.NORMAL)
+                boxes = []
+                for item in result:
+                    n_x, n_y, n_w, n_h = item["bbox"]
+                    label = str(item["label"])
+                    if len(label) > 80:
+                        label = label[:77] + "..."
+                    boxes.append(
+                        (float(n_x), float(n_y), float(n_w), float(n_h), label)
+                    )
+                self._detection_normalized = boxes
+                self._paint()
+
+            def on_error(error_msg: str) -> None:
+                if not panel_alive():
+                    return
+                detect_btn.configure(text="Find object", state=tk.NORMAL)
+                messagebox.showerror("Error", error_msg, parent=panel)
+
+            detect_objects_async(
+                self.root,
+                self.display_master,
+                api_key,
+                self.last_description or "",
+                question,
+                on_done,
+                on_error,
+            )
+
+        detect_btn.configure(command=on_detect_click)
 
     def _on_map(self, _event: tk.Event) -> None:
         self._mapped = True
@@ -247,6 +427,31 @@ class App:
             anchor=tk.NW,
             tags="image",
         )
+        if self._detection_normalized is not None:
+            label_family = self.wordmark_font[0]
+            for n_x, n_y, n_w, n_h, label in self._detection_normalized:
+                box_x = offset_x + n_x * display_w
+                box_y = offset_y + n_y * display_h
+                box_w = n_w * display_w
+                box_h = n_h * display_h
+                self.viewport.create_rectangle(
+                    box_x,
+                    box_y,
+                    box_x + box_w,
+                    box_y + box_h,
+                    outline="#00ff00",
+                    width=2,
+                    tags="detection",
+                )
+                self.viewport.create_text(
+                    box_x,
+                    box_y - 4,
+                    text=label,
+                    fill="#00ff00",
+                    anchor=tk.SW,
+                    font=(label_family, 10),
+                    tags="detection",
+                )
 
 
 def main() -> None:

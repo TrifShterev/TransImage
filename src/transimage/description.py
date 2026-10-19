@@ -55,7 +55,9 @@ def describe_image_async(
     threading.Thread(target=_run, daemon=True).start()
 
 
-def generate_and_show_description(root, btn, image: Image, api_key: str | None) -> None:
+def generate_and_show_description(
+    root, btn, image: Image, api_key: str | None, after_success=None
+) -> None:
     if not api_key:
         messagebox.showerror(
             "TransImage",
@@ -74,6 +76,8 @@ def generate_and_show_description(root, btn, image: Image, api_key: str | None) 
     def on_done(result: str) -> None:
         btn.configure(text="Generate Description", state="normal")
         messagebox.showinfo("Description", result, parent=root)
+        if after_success is not None:
+            after_success(result)
 
     def on_error(error_msg: str) -> None:
         btn.configure(text="Generate Description", state="normal")
