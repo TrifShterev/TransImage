@@ -7,7 +7,11 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from PIL import Image, ImageOps, ImageTk
 
 from transimage.detection import detect_objects_async
-from transimage.description import generate_and_show_description
+from transimage.description import (
+    DEFAULT_LANGUAGE,
+    LANGUAGES,
+    generate_and_show_description,
+)
 from transimage.fit import fit_image
 from transimage.modify import modify_image_async
 from transimage.platform_ui import choose_font_family
@@ -91,8 +95,11 @@ class App:
         )
         wordmark.place(x=16, rely=0.5, anchor=tk.W)
 
+        toolbar = tk.Frame(header, bg=_HEADER_BG)
+        toolbar.place(x=140, rely=0.5, anchor=tk.W)
+
         self.generate_btn = tk.Button(
-            header,
+            toolbar,
             text="Generate Description",
             bg=_HEADER_BG, fg="#ffffff",
             activebackground="#3c3c3c", activeforeground="#ffffff",
@@ -102,10 +109,32 @@ class App:
             state=tk.DISABLED,
             command=self._on_generate_description,
         )
-        self.generate_btn.place(x=140, rely=0.5, anchor=tk.W)
+        self.generate_btn.pack(side=tk.LEFT)
+
+        self.language_var = tk.StringVar(value=DEFAULT_LANGUAGE)
+        language_btn = tk.Menubutton(
+            toolbar,
+            textvariable=self.language_var,
+            bg="#3c3c3c", fg="#ffffff",
+            activebackground="#4a4a4a", activeforeground="#ffffff",
+            font=self.menu_font,
+            relief=tk.FLAT, borderwidth=0,
+            highlightthickness=0,
+            padx=8, pady=4,
+            indicatoron=True,
+        )
+        language_menu = tk.Menu(language_btn, tearoff=False, font=self.menu_font)
+        for code, (_english, native) in LANGUAGES.items():
+            language_menu.add_radiobutton(
+                label=f"{code} — {native}",
+                value=code,
+                variable=self.language_var,
+            )
+        language_btn.configure(menu=language_menu)
+        language_btn.pack(side=tk.LEFT, padx=(0, 16))
 
         self.detect_btn = tk.Button(
-            header,
+            toolbar,
             text="Object Detection",
             bg=_HEADER_BG, fg="#ffffff",
             activebackground="#3c3c3c", activeforeground="#ffffff",
@@ -115,10 +144,10 @@ class App:
             state=tk.DISABLED,
             command=self._on_object_detection,
         )
-        self.detect_btn.place(x=330, rely=0.5, anchor=tk.W)
+        self.detect_btn.pack(side=tk.LEFT)
 
         self.modify_btn = tk.Button(
-            header,
+            toolbar,
             text="Modify image",
             bg=_HEADER_BG, fg="#ffffff",
             activebackground="#3c3c3c", activeforeground="#ffffff",
@@ -128,7 +157,7 @@ class App:
             state=tk.DISABLED,
             command=self._on_modify_image,
         )
-        self.modify_btn.place(x=510, rely=0.5, anchor=tk.W)
+        self.modify_btn.pack(side=tk.LEFT)
 
         open_button = tk.Button(
             header,
@@ -203,6 +232,7 @@ class App:
             master,
             os.environ.get("OPENROUTER_API_KEY"),
             after_success=lambda result: self._on_description_done(master, result),
+            language=self.language_var.get(),
         )
 
     def _on_description_done(self, master: Image.Image | None, result: str) -> None:

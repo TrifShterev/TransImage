@@ -11,6 +11,23 @@ from transimage.request_limits import REQUEST_TIMEOUT_MS
 
 DEFAULT_MODEL = "qwen/qwen3-vl-235b-a22b-instruct"
 
+# code -> (English name used in the prompt, native name shown in the menu)
+LANGUAGES = {
+    "EN": ("English", "English"),
+    "FI": ("Finnish", "Suomi"),
+    "BG": ("Bulgarian", "Български"),
+}
+DEFAULT_LANGUAGE = "EN"
+
+
+def build_description_prompt(base_prompt: str, language: str) -> str:
+    name = LANGUAGES.get(language, LANGUAGES[DEFAULT_LANGUAGE])[0]
+    return (
+        f"{base_prompt}\n\n"
+        f"Write the entire response in {name}, regardless of the language "
+        "used in the instructions above."
+    )
+
 
 def get_description_model() -> str:
     return os.environ.get("MODEL_DESCRIBE_IMAGE") or DEFAULT_MODEL
@@ -64,7 +81,12 @@ def describe_image_async(
 
 
 def generate_and_show_description(
-    root, btn, image: Image, api_key: str | None, after_success=None
+    root,
+    btn,
+    image: Image,
+    api_key: str | None,
+    after_success=None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> None:
     if not api_key:
         messagebox.showerror(
@@ -87,12 +109,13 @@ def generate_and_show_description(
             parent=root,
         )
         return
+    prompt = build_description_prompt(prompt, language)
 
     btn.configure(text="Generating...", state="disabled")
 
     def on_done(result: str) -> None:
         btn.configure(text="Generate Description", state="normal")
-        messagebox.showinfo("Description", result, parent=root)
+        messagebox.showinfo(f"Description ({language})", result, parent=root)
         if after_success is not None:
             after_success(result)
 
