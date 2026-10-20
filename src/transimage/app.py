@@ -1,6 +1,7 @@
 import os
 import tkinter as tk
 import tkinter.font as tkfont
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
@@ -12,12 +13,21 @@ from transimage.description import (
     LANGUAGES,
     generate_and_show_description,
 )
+from transimage.export import (
+    DEFAULT_EXPORT_FORMAT,
+    build_export_path,
+    export_dir,
+    resolve_export_target,
+    save_image,
+)
 from transimage.fit import fit_image
 from transimage.modify import modify_image_async
 from transimage.platform_ui import choose_font_family
 
 _HEADER_BG = "#2b2b2b"
 _VIEWPORT_BG = "#111111"
+_ACCENT_BG = "#2d7ff9"
+_ACCENT_ACTIVE_BG = "#1f6fe0"
 _HEADER_HEIGHT = 44
 _MASTER_LIMIT = 4096
 _FILETYPES = (
@@ -29,6 +39,11 @@ _FILETYPES = (
     ("WEBP", "*.webp"),
     ("TIFF", "*.tif *.tiff"),
     ("All files", "*.*"),
+)
+_EXPORT_FILETYPES = (
+    ("PNG", "*.png"),
+    ("JPG", "*.jpg"),
+    ("JPEG", "*.jpeg"),
 )
 
 
@@ -159,6 +174,20 @@ class App:
         )
         self.modify_btn.pack(side=tk.LEFT)
 
+        self.export_btn = tk.Button(
+            toolbar,
+            text="Export image",
+            bg=_HEADER_BG, fg="#ffffff",
+            activebackground="#3c3c3c", activeforeground="#ffffff",
+            font=self.menu_font,
+            relief=tk.FLAT, borderwidth=0,
+            padx=12, pady=4,
+            state=tk.DISABLED,
+            command=self._on_export_image,
+        )
+        self.export_btn.pack(side=tk.LEFT)
+        self.export_type_var = tk.StringVar(value=DEFAULT_EXPORT_FORMAT)
+
         open_button = tk.Button(
             header,
             text="Open Image...",
@@ -214,6 +243,7 @@ class App:
         self.display_master = master
         self.generate_btn.configure(state=tk.NORMAL)
         self.modify_btn.configure(state=tk.NORMAL)
+        self.export_btn.configure(state=tk.NORMAL)
         self.last_description = None
         self._detection_normalized = None
         self._update_detect_btn_state()
@@ -249,6 +279,29 @@ class App:
             state=tk.NORMAL if (has_image and has_desc) else tk.DISABLED
         )
 
+    def _accent_button(self, parent: tk.Misc, text: str) -> tk.Button:
+        return tk.Button(
+            parent,
+            text=text,
+            bg=_ACCENT_BG, fg="#ffffff",
+            activebackground=_ACCENT_ACTIVE_BG, activeforeground="#ffffff",
+            disabledforeground="#c7d6f5",
+            font=(self.menu_font[0], self.menu_font[1], "bold"),
+            relief=tk.FLAT, borderwidth=0,
+            highlightthickness=0,
+            padx=22, pady=7,
+            cursor="hand2",
+        )
+
+    def _finalize_dialog(self, panel: tk.Toplevel, width: int, height: int) -> None:
+        # Never let the window be smaller than its content (keeps buttons visible).
+        panel.update_idletasks()
+        min_w, min_h = panel.winfo_reqwidth(), panel.winfo_reqheight()
+        panel.minsize(min_w, min_h)
+        new_w, new_h = max(width, min_w), max(height, min_h)
+        if (new_w, new_h) != (width, height):
+            panel.geometry(f"{new_w}x{new_h}")
+
     def _on_object_detection(self) -> None:
         if self.display_master is None:
             return
@@ -272,7 +325,6 @@ class App:
         area.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
         area.columnconfigure(0, weight=1)
         area.rowconfigure(1, weight=1)
-        area.rowconfigure(5, weight=1)
 
         tk.Label(
             area,
@@ -284,6 +336,8 @@ class App:
 
         desc_view = scrolledtext.ScrolledText(
             area,
+            height=6,
+            width=40,
             wrap=tk.WORD,
             font=self.menu_font,
             bg="#1e1e1e",
@@ -311,6 +365,7 @@ class App:
         question_view = tk.Text(
             area,
             height=3,
+            width=40,
             wrap=tk.WORD,
             font=self.menu_font,
             bg="#1e1e1e",
@@ -318,19 +373,13 @@ class App:
             insertbackground="#ffffff",
             relief=tk.FLAT,
         )
-        question_view.grid(row=4, column=0, sticky="ew", pady=(0, 10))
+        question_view.grid(row=4, column=0, sticky="ew")
 
-        detect_btn = tk.Button(
-            area,
-text="Find object",
-            bg=_HEADER_BG, fg="#ffffff",
-            activebackground="#3c3c3c", activeforeground="#ffffff",
-            font=self.menu_font,
-            relief=tk.FLAT, borderwidth=0,
-            padx=16, pady=4,
-            command=None,
-        )
-        detect_btn.grid(row=5, column=0, sticky="nw", pady=(10, 0))
+        button_bar = tk.Frame(area, bg=_HEADER_BG)
+        button_bar.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+        detect_btn = self._accent_button(button_bar, "Find object")
+        detect_btn.pack(side=tk.RIGHT)
+        self._finalize_dialog(panel, width, height)
 
         def panel_alive() -> bool:
             try:
@@ -415,7 +464,6 @@ text="Find object",
         area.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
         area.columnconfigure(0, weight=1)
         area.rowconfigure(1, weight=1)
-        area.rowconfigure(5, weight=1)
 
         tk.Label(
             area,
@@ -427,6 +475,8 @@ text="Find object",
 
         desc_view = scrolledtext.ScrolledText(
             area,
+            height=6,
+            width=40,
             wrap=tk.WORD,
             font=self.menu_font,
             bg="#1e1e1e",
@@ -454,6 +504,7 @@ text="Find object",
         request_view = tk.Text(
             area,
             height=3,
+            width=40,
             wrap=tk.WORD,
             font=self.menu_font,
             bg="#1e1e1e",
@@ -461,19 +512,13 @@ text="Find object",
             insertbackground="#ffffff",
             relief=tk.FLAT,
         )
-        request_view.grid(row=4, column=0, sticky="ew", pady=(0, 10))
+        request_view.grid(row=4, column=0, sticky="ew")
 
-        apply_btn = tk.Button(
-            area,
-            text="Apply",
-            bg=_HEADER_BG, fg="#ffffff",
-            activebackground="#3c3c3c", activeforeground="#ffffff",
-            font=self.menu_font,
-            relief=tk.FLAT, borderwidth=0,
-            padx=16, pady=4,
-            command=None,
-        )
-        apply_btn.grid(row=5, column=0, sticky="nw", pady=(10, 0))
+        button_bar = tk.Frame(area, bg=_HEADER_BG)
+        button_bar.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+        apply_btn = self._accent_button(button_bar, "Apply")
+        apply_btn.pack(side=tk.RIGHT)
+        self._finalize_dialog(panel, width, height)
 
         in_flight = [False]
 
@@ -536,6 +581,54 @@ text="Find object",
             )
 
         apply_btn.configure(command=on_apply_click)
+
+    def _on_export_image(self) -> None:
+        image = self.source_image
+        if image is None:
+            return
+        stem = self.source_path.stem if self.source_path is not None else "image"
+        folder = export_dir()
+        kwargs: dict[str, str] = {}
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            kwargs["initialdir"] = str(folder)
+        except OSError:
+            pass
+        fmt = self.export_type_var.get()
+        suggested = build_export_path(folder, stem, fmt, datetime.now())
+        selected = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="Export image",
+            filetypes=_EXPORT_FILETYPES,
+            defaultextension=f".{fmt.lower()}",
+            initialfile=suggested.name,
+            typevariable=self.export_type_var,
+            **kwargs,
+        )
+        if not selected:
+            return
+        saved, fmt = resolve_export_target(selected, self.export_type_var.get())
+        if str(saved) != str(Path(selected)) and saved.exists():
+            if not messagebox.askyesno(
+                "Export image",
+                f"{saved.name} already exists.\nDo you want to replace it?",
+                parent=self.root,
+            ):
+                return
+        try:
+            save_image(image, saved, fmt)
+        except Exception as exc:
+            messagebox.showerror(
+                "Export image",
+                f"Could not export the image.\n{exc}",
+                parent=self.root,
+            )
+            return
+        messagebox.showinfo(
+            "Export image",
+            f"Saved to:\n{saved}",
+            parent=self.root,
+        )
 
     def _on_map(self, _event: tk.Event) -> None:
         self._mapped = True
