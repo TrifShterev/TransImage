@@ -1,12 +1,17 @@
 import os
+import shutil
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import BinaryIO
 
 from PIL import Image
 
 EXPORT_FORMATS = ("PNG", "JPG", "JPEG")
 DEFAULT_EXPORT_FORMAT = "PNG"
+VIDEO_EXPORT_FORMATS = ("MP4",)
+DEFAULT_VIDEO_EXPORT_FORMAT = "MP4"
 EXPORT_FOLDER_NAME = "TransImage"
 _JPEG_QUALITY = 95
 _PNG_MODES = ("1", "L", "LA", "I", "I;16", "P", "RGB", "RGBA")
@@ -98,33 +103,56 @@ def build_export_path(folder: Path, stem: str, fmt: str, now: datetime) -> Path:
     return candidate
 
 
-def format_for_suffix(suffix: str) -> str | None:
+def format_for_suffix(
+    suffix: str, formats: tuple[str, ...] = EXPORT_FORMATS
+) -> str | None:
     fmt = suffix.lstrip(".").upper()
-    return fmt if fmt in EXPORT_FORMATS else None
+    return fmt if fmt in formats else None
 
 
-def resolve_export_target(selected: str, chosen_type: str | None) -> tuple[Path, str]:
+def resolve_export_target(
+    selected: str,
+    chosen_type: str | None,
+    formats: tuple[str, ...] = EXPORT_FORMATS,
+    default: str = DEFAULT_EXPORT_FORMAT,
+) -> tuple[Path, str]:
     path = Path(selected)
-    fmt = format_for_suffix(path.suffix)
+    fmt = format_for_suffix(path.suffix, formats)
     if fmt is not None:
         return path, fmt
-    fmt = chosen_type if chosen_type in EXPORT_FORMATS else DEFAULT_EXPORT_FORMAT
+    fmt = chosen_type if chosen_type in formats else default
     return path.with_name(f"{path.name}.{fmt.lower()}"), fmt
+
+
+def _write_atomic(path: Path, write: Callable[[BinaryIO], None]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(f".{path.name}.partial")
+    try:
+        with partial.open("wb") as handle:
+            write(handle)
+        partial.replace(path)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
 
 
 def save_image(image: Image.Image, path: Path, fmt: str) -> None:
     if fmt not in EXPORT_FORMATS:
         raise ValueError(f"Unsupported export format: {fmt}")
     prepared = prepare_for_format(image, fmt)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(f".{path.name}.partial")
-    try:
-        with partial.open("wb") as handle:
-            if fmt == "PNG":
-                prepared.save(handle, format="PNG")
-            else:
-                prepared.save(handle, format="JPEG", quality=_JPEG_QUALITY)
-        partial.replace(path)
-    except BaseException:
-        partial.unlink(missing_ok=True)
-        raise
+
+    def write(handle: BinaryIO) -> None:
+        if fmt == "PNG":
+            prepared.save(handle, format="PNG")
+        else:
+            prepared.save(handle, format="JPEG", quality=_JPEG_QUALITY)
+
+    _write_atomic(path, write)
+
+
+def save_video(source: Path, path: Path) -> None:
+    def write(handle: BinaryIO) -> None:
+        with source.open("rb") as reader:
+            shutil.copyfileobj(reader, handle)
+
+    _write_atomic(path, write)

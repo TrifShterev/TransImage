@@ -1,3 +1,4 @@
+import atexit
 import os
 import tkinter as tk
 import tkinter.font as tkfont
@@ -15,14 +16,26 @@ from transimage.description import (
 )
 from transimage.export import (
     DEFAULT_EXPORT_FORMAT,
+    DEFAULT_VIDEO_EXPORT_FORMAT,
+    EXPORT_FORMATS,
+    VIDEO_EXPORT_FORMATS,
     build_export_path,
     export_dir,
     resolve_export_target,
     save_image,
+    save_video,
 )
 from transimage.fit import fit_image
 from transimage.modify import modify_image_async
-from transimage.platform_ui import choose_font_family
+from transimage.platform_ui import choose_font_family, open_with_system_player
+from transimage.video import (
+    DEFAULT_DURATION,
+    MAX_DURATION,
+    MIN_DURATION,
+    clamp_duration,
+    generate_video_async,
+)
+from transimage.video_player import VideoPlayback
 
 _HEADER_BG = "#2b2b2b"
 _VIEWPORT_BG = "#111111"
@@ -45,6 +58,27 @@ _EXPORT_FILETYPES = (
     ("JPG", "*.jpg"),
     ("JPEG", "*.jpeg"),
 )
+_EXPORT_VIDEO_FILETYPES = (("MP4", "*.mp4"),)
+_VIDEO_STATUS_LABELS = {
+    "pending": "Queued",
+    "in_progress": "Rendering",
+}
+
+
+def _delete_temp_video(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        # Still locked (e.g. by a system player on Windows): retry on exit.
+        atexit.register(lambda: path.unlink(missing_ok=True))
+
+
+def _format_status(status: str, elapsed: float) -> str:
+    if status == "downloading":
+        return "Downloading…"
+    label = _VIDEO_STATUS_LABELS.get(status, status.replace("_", " ").capitalize())
+    minutes, seconds = divmod(int(elapsed), 60)
+    return f"{label}… {minutes}:{seconds:02d}"
 
 
 def load_image(path: Path) -> Image.Image:
@@ -83,12 +117,13 @@ class App:
         self._detection_normalized: (
             list[tuple[float, float, float, float, str]] | None
         ) = None
+        self._video_in_flight = False
         self._build()
 
     def _build(self) -> None:
         self.root.title("TransImage")
         self.root.minsize(640, 480)
-        self.root.geometry("1100x720")
+        self.root.geometry("1280x720")
         self.root.configure(bg=_VIEWPORT_BG)
 
         family = choose_font_family(tkfont.families(self.root))
@@ -187,6 +222,43 @@ class App:
         )
         self.export_btn.pack(side=tk.LEFT)
         self.export_type_var = tk.StringVar(value=DEFAULT_EXPORT_FORMAT)
+        self.video_export_type_var = tk.StringVar(value=DEFAULT_VIDEO_EXPORT_FORMAT)
+
+        self.video_btn = tk.Button(
+            toolbar,
+            text="Generate video",
+            bg=_HEADER_BG, fg="#ffffff",
+            activebackground="#3c3c3c", activeforeground="#ffffff",
+            font=self.menu_font,
+            relief=tk.FLAT, borderwidth=0,
+            padx=12, pady=4,
+            state=tk.DISABLED,
+            command=self._on_generate_video,
+        )
+        self.video_btn.pack(side=tk.LEFT)
+
+        tk.Label(
+            toolbar,
+            text="Duration in seconds",
+            bg=_HEADER_BG,
+            fg="#ffffff",
+            font=self.menu_font,
+        ).pack(side=tk.LEFT, padx=(4, 6))
+        self.video_duration_var = tk.StringVar(value=str(DEFAULT_DURATION))
+        tk.Spinbox(
+            toolbar,
+            from_=MIN_DURATION,
+            to=MAX_DURATION,
+            width=3,
+            textvariable=self.video_duration_var,
+            state="readonly",
+            readonlybackground="#3c3c3c",
+            bg="#3c3c3c", fg="#ffffff",
+            buttonbackground="#3c3c3c",
+            font=self.menu_font,
+            relief=tk.FLAT, borderwidth=0,
+            highlightthickness=0,
+        ).pack(side=tk.LEFT)
 
         open_button = tk.Button(
             header,
@@ -244,6 +316,7 @@ class App:
         self.generate_btn.configure(state=tk.NORMAL)
         self.modify_btn.configure(state=tk.NORMAL)
         self.export_btn.configure(state=tk.NORMAL)
+        self.video_btn.configure(state=tk.NORMAL)
         self.last_description = None
         self._detection_normalized = None
         self._update_detect_btn_state()
@@ -582,11 +655,16 @@ class App:
 
         apply_btn.configure(command=on_apply_click)
 
-    def _on_export_image(self) -> None:
-        image = self.source_image
-        if image is None:
-            return
-        stem = self.source_path.stem if self.source_path is not None else "image"
+    def _ask_export_target(
+        self,
+        parent: tk.Misc,
+        title: str,
+        filetypes: tuple[tuple[str, str], ...],
+        type_var: tk.StringVar,
+        formats: tuple[str, ...],
+        default_fmt: str,
+        stem: str,
+    ) -> tuple[Path, str] | None:
         folder = export_dir()
         kwargs: dict[str, str] = {}
         try:
@@ -594,27 +672,50 @@ class App:
             kwargs["initialdir"] = str(folder)
         except OSError:
             pass
-        fmt = self.export_type_var.get()
+        fmt = type_var.get()
+        if fmt not in formats:
+            fmt = default_fmt
         suggested = build_export_path(folder, stem, fmt, datetime.now())
         selected = filedialog.asksaveasfilename(
-            parent=self.root,
-            title="Export image",
-            filetypes=_EXPORT_FILETYPES,
+            parent=parent,
+            title=title,
+            filetypes=filetypes,
             defaultextension=f".{fmt.lower()}",
             initialfile=suggested.name,
-            typevariable=self.export_type_var,
+            typevariable=type_var,
             **kwargs,
         )
         if not selected:
-            return
-        saved, fmt = resolve_export_target(selected, self.export_type_var.get())
+            return None
+        saved, fmt = resolve_export_target(
+            selected, type_var.get(), formats, default_fmt
+        )
         if str(saved) != str(Path(selected)) and saved.exists():
             if not messagebox.askyesno(
-                "Export image",
+                title,
                 f"{saved.name} already exists.\nDo you want to replace it?",
-                parent=self.root,
+                parent=parent,
             ):
-                return
+                return None
+        return saved, fmt
+
+    def _on_export_image(self) -> None:
+        image = self.source_image
+        if image is None:
+            return
+        stem = self.source_path.stem if self.source_path is not None else "image"
+        target = self._ask_export_target(
+            self.root,
+            "Export image",
+            _EXPORT_FILETYPES,
+            self.export_type_var,
+            EXPORT_FORMATS,
+            DEFAULT_EXPORT_FORMAT,
+            stem,
+        )
+        if target is None:
+            return
+        saved, fmt = target
         try:
             save_image(image, saved, fmt)
         except Exception as exc:
@@ -628,6 +729,288 @@ class App:
             "Export image",
             f"Saved to:\n{saved}",
             parent=self.root,
+        )
+
+    def _on_generate_video(self) -> None:
+        if self.display_master is None:
+            return
+        description = self.last_description or ""
+
+        panel = tk.Toplevel(self.root)
+        panel.title("Generate video")
+        panel.configure(bg=_HEADER_BG)
+        panel.transient(self.root)
+
+        width, height = 640, 520
+        parent_x = self.root.winfo_rootx() + max(
+            0, (self.root.winfo_width() - width) // 2
+        )
+        parent_y = self.root.winfo_rooty() + max(
+            0, (self.root.winfo_height() - height) // 2
+        )
+        panel.geometry(f"{width}x{height}+{parent_x}+{parent_y}")
+
+        area = tk.Frame(panel, bg=_HEADER_BG)
+        area.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        area.columnconfigure(0, weight=1)
+        area.rowconfigure(1, weight=1)
+
+        tk.Label(
+            area,
+            text="Description (read-only):",
+            bg=_HEADER_BG,
+            fg="#ffffff",
+            font=self.menu_font,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
+
+        desc_view = scrolledtext.ScrolledText(
+            area,
+            height=6,
+            width=40,
+            wrap=tk.WORD,
+            font=self.menu_font,
+            bg="#1e1e1e",
+            fg="#ffffff",
+            relief=tk.FLAT,
+            state=tk.DISABLED,
+        )
+        desc_view.grid(row=1, column=0, sticky="nsew")
+        desc_view.configure(state=tk.NORMAL)
+        desc_view.insert(
+            "1.0", description or "No description generated (optional)."
+        )
+        desc_view.configure(state=tk.DISABLED)
+
+        ttk.Separator(area, orient=tk.HORIZONTAL).grid(
+            row=2, column=0, sticky="ew", pady=10
+        )
+
+        tk.Label(
+            area,
+            text="Video request:",
+            bg=_HEADER_BG,
+            fg="#ffffff",
+            font=self.menu_font,
+        ).grid(row=3, column=0, sticky="w", pady=(0, 4))
+
+        request_view = tk.Text(
+            area,
+            height=3,
+            width=40,
+            wrap=tk.WORD,
+            font=self.menu_font,
+            bg="#1e1e1e",
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief=tk.FLAT,
+        )
+        request_view.grid(row=4, column=0, sticky="ew")
+
+        button_bar = tk.Frame(area, bg=_HEADER_BG)
+        button_bar.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+        status_label = tk.Label(
+            button_bar,
+            text="",
+            bg=_HEADER_BG,
+            fg="#a3a3a3",
+            font=self.menu_font,
+        )
+        status_label.pack(side=tk.LEFT)
+        generate_btn = self._accent_button(button_bar, "Generate")
+        generate_btn.pack(side=tk.RIGHT)
+        self._finalize_dialog(panel, width, height)
+
+        def panel_alive() -> bool:
+            try:
+                return bool(panel.winfo_exists())
+            except tk.TclError:
+                return False
+
+        def on_generate_click() -> None:
+            api_key = os.environ.get("OPENROUTER_API_KEY")
+            if not api_key:
+                messagebox.showerror(
+                    "TransImage",
+                    "No API key configured.\n"
+                    "Set OPENROUTER_API_KEY in .env",
+                    parent=panel,
+                )
+                return
+            request = request_view.get("1.0", "end-1c").strip()
+            if not request:
+                messagebox.showerror(
+                    "Generate video",
+                    "Please enter a video request.",
+                    parent=panel,
+                )
+                return
+            if self._video_in_flight:
+                messagebox.showinfo(
+                    "Generate video",
+                    "A video is already being generated.",
+                    parent=panel,
+                )
+                return
+            image = self.display_master
+            if image is None:
+                return
+            snapshot_desc = self.last_description or ""
+            duration = clamp_duration(self.video_duration_var.get())
+            stem = self.source_path.stem if self.source_path is not None else "video"
+            self._video_in_flight = True
+            generate_btn.configure(text="Generating...", state=tk.DISABLED)
+            status_label.configure(text="Starting…")
+
+            def on_status(status: str, elapsed: float) -> None:
+                if panel_alive():
+                    status_label.configure(text=_format_status(status, elapsed))
+
+            def on_done(path: Path) -> None:
+                self._video_in_flight = False
+                if panel_alive():
+                    generate_btn.configure(text="Generate", state=tk.NORMAL)
+                    status_label.configure(text="")
+                self._open_video_player(path, stem)
+
+            def on_error(error_msg: str) -> None:
+                self._video_in_flight = False
+                parent: tk.Misc = self.root
+                if panel_alive():
+                    generate_btn.configure(text="Generate", state=tk.NORMAL)
+                    status_label.configure(text="")
+                    parent = panel
+                messagebox.showerror("Error", error_msg, parent=parent)
+
+            generate_video_async(
+                self.root,
+                image,
+                api_key,
+                request,
+                duration,
+                snapshot_desc,
+                on_status,
+                on_done,
+                on_error,
+            )
+
+        generate_btn.configure(command=on_generate_click)
+
+    def _open_video_player(self, path: Path, stem: str) -> None:
+        player = tk.Toplevel(self.root)
+        player.title("Video preview")
+        player.configure(bg="#000000")
+        player.transient(self.root)
+
+        width, height = 800, 560
+        parent_x = self.root.winfo_rootx() + max(
+            0, (self.root.winfo_width() - width) // 2
+        )
+        parent_y = self.root.winfo_rooty() + max(
+            0, (self.root.winfo_height() - height) // 2
+        )
+        player.geometry(f"{width}x{height}+{parent_x}+{parent_y}")
+        player.minsize(480, 360)
+
+        controls = tk.Frame(player, bg=_HEADER_BG)
+        controls.pack(side=tk.BOTTOM, fill=tk.X)
+        canvas = tk.Canvas(player, bg="#000000", highlightthickness=0, bd=0)
+        canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        play_btn = tk.Button(
+            controls,
+            text="Pause",
+            bg="#3c3c3c", fg="#ffffff",
+            activebackground="#4a4a4a", activeforeground="#ffffff",
+            font=self.menu_font,
+            relief=tk.FLAT, borderwidth=0,
+            padx=14, pady=6,
+            width=7,
+        )
+        play_btn.pack(side=tk.LEFT, padx=(10, 6), pady=8)
+        system_btn = tk.Button(
+            controls,
+            text="Open in system player",
+            bg="#3c3c3c", fg="#ffffff",
+            activebackground="#4a4a4a", activeforeground="#ffffff",
+            font=self.menu_font,
+            relief=tk.FLAT, borderwidth=0,
+            padx=14, pady=6,
+        )
+        system_btn.pack(side=tk.LEFT, pady=8)
+        export_btn = self._accent_button(controls, "Export video")
+        export_btn.pack(side=tk.RIGHT, padx=10, pady=8)
+        player.update_idletasks()
+
+        state_labels = {"playing": "Pause", "paused": "Play", "ended": "Replay"}
+
+        def on_state(state: str) -> None:
+            play_btn.configure(text=state_labels.get(state, "Play"))
+
+        playback = VideoPlayback(player, canvas, path, on_state)
+        cleaned = [False]
+
+        def cleanup() -> None:
+            if cleaned[0]:
+                return
+            cleaned[0] = True
+            playback.close()
+            _delete_temp_video(path)
+
+        def on_close() -> None:
+            cleanup()
+            try:
+                player.destroy()
+            except tk.TclError:
+                pass
+
+        def on_destroy(event: tk.Event) -> None:
+            if event.widget is player:
+                cleanup()
+
+        def on_system_player() -> None:
+            try:
+                open_with_system_player(path)
+            except OSError as exc:
+                messagebox.showerror(
+                    "Video preview",
+                    f"Could not open the system player.\n{exc}",
+                    parent=player,
+                )
+
+        play_btn.configure(command=playback.toggle)
+        system_btn.configure(command=on_system_player)
+        export_btn.configure(
+            command=lambda: self._on_export_video(player, path, stem)
+        )
+        player.protocol("WM_DELETE_WINDOW", on_close)
+        player.bind("<Destroy>", on_destroy, add="+")
+
+    def _on_export_video(self, panel: tk.Misc, path: Path, stem: str) -> None:
+        target = self._ask_export_target(
+            panel,
+            "Export video",
+            _EXPORT_VIDEO_FILETYPES,
+            self.video_export_type_var,
+            VIDEO_EXPORT_FORMATS,
+            DEFAULT_VIDEO_EXPORT_FORMAT,
+            stem,
+        )
+        if target is None:
+            return
+        saved, _fmt = target
+        try:
+            save_video(path, saved)
+        except Exception as exc:
+            messagebox.showerror(
+                "Export video",
+                f"Could not export the video.\n{exc}",
+                parent=panel,
+            )
+            return
+        messagebox.showinfo(
+            "Export video",
+            f"Saved to:\n{saved}",
+            parent=panel,
         )
 
     def _on_map(self, _event: tk.Event) -> None:

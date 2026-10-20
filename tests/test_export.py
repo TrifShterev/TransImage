@@ -7,12 +7,15 @@ from PIL import Image
 
 from transimage import export
 from transimage.export import (
+    DEFAULT_VIDEO_EXPORT_FORMAT,
+    VIDEO_EXPORT_FORMATS,
     build_export_path,
     parse_xdg_pictures_dir,
     pictures_dir,
     prepare_for_format,
     resolve_export_target,
     save_image,
+    save_video,
 )
 
 _NOW = datetime(2026, 10, 19, 14, 30, 5)
@@ -95,6 +98,69 @@ def test_resolve_export_target(
     path, fmt = resolve_export_target(str(tmp_path / selected), chosen)
     assert path == tmp_path / expected_name
     assert fmt == expected_fmt
+
+
+@pytest.mark.parametrize(
+    "selected, chosen, expected_name",
+    [
+        ("clip.mp4", "MP4", "clip.mp4"),
+        ("clip.MP4", None, "clip.MP4"),
+        ("clip", "MP4", "clip.mp4"),
+        ("clip", None, "clip.mp4"),
+        ("clip.mov", "MP4", "clip.mov.mp4"),
+        ("clip.png", "PNG", "clip.png.mp4"),
+    ],
+)
+def test_resolve_video_export_target(
+    tmp_path: Path, selected: str, chosen, expected_name: str
+) -> None:
+    path, fmt = resolve_export_target(
+        str(tmp_path / selected),
+        chosen,
+        VIDEO_EXPORT_FORMATS,
+        DEFAULT_VIDEO_EXPORT_FORMAT,
+    )
+    assert path == tmp_path / expected_name
+    assert fmt == "MP4"
+
+
+def test_suggested_video_name(tmp_path: Path) -> None:
+    assert build_export_path(tmp_path, "a", "MP4", _NOW) == (
+        tmp_path / "a_20261019-143005.mp4"
+    )
+
+
+def test_save_video_copies_bytes(tmp_path: Path) -> None:
+    source = tmp_path / "src.mp4"
+    source.write_bytes(b"video-bytes" * 1000)
+    target = tmp_path / "out.mp4"
+    save_video(source, target)
+    assert target.read_bytes() == source.read_bytes()
+    assert source.exists()
+
+
+def test_save_video_replaces_existing_file(tmp_path: Path) -> None:
+    source = tmp_path / "src.mp4"
+    source.write_bytes(b"new")
+    target = tmp_path / "out.mp4"
+    target.write_bytes(b"old")
+    save_video(source, target)
+    assert target.read_bytes() == b"new"
+
+
+def test_save_video_creates_folder_and_leaves_no_partial(tmp_path: Path) -> None:
+    source = tmp_path / "src.mp4"
+    source.write_bytes(b"data")
+    target = tmp_path / "Pictures" / "TransImage" / "out.mp4"
+    save_video(source, target)
+    assert [p.name for p in target.parent.iterdir()] == ["out.mp4"]
+
+
+def test_save_video_failure_leaves_no_partial(tmp_path: Path) -> None:
+    target = tmp_path / "out"
+    with pytest.raises(OSError):
+        save_video(tmp_path / "missing.mp4", target / "out.mp4")
+    assert not list(tmp_path.rglob("*.partial"))
 
 
 def test_parse_xdg_pictures_dir(tmp_path: Path) -> None:
