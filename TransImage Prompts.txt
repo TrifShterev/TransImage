@@ -1,0 +1,72 @@
+A Desktop project where images can be modified via AI, the app integrates AI models from OpenRouter
+
+Used models:
+For plan Grok 4.7 via Kilo(OpenRouter Api)
+Execution Qwen2.5 72B Instruct
+
+Image to Text desciption: Qwen3-VL-235B-A22B
+
+Prompts:
+1. I want to create a desktop application for creative/interactive AI functionalities on images.
+
+- The name of the app is "TransImage"
+- Techstack: Python + tkinter + pillow
+- For AI functionalities, we will use models from OpenRouter. The API key must be stored in an .env file.
+- Use Python project files to list and manage all dependencies and their transitive dependencies too. Do not rely on requirements.txt
+- Use a venv virtual environment.
+
+Minimal requirements:
+- A user must be able to open an image within the app.
+- The image must take all of the available space(preserve some at the top pf the window for logo and command bar menu).
+- Never change the aspect ratio of the uploaded image.
+
+----
+If any questions about OpenRouter let the AI skip it for now  - we will develop this later.
+---
+During the planning process:
+2. Consider the fact that the application must be cross-platform. I want you to create an AGENTS.md file in which this must be one of the key points.
+
+---
+After the project is initialized check for README.md and if not
+----
+.
+3. Create a concise README.md file that briefly explains what this project is about and how to run it.
+
+---
+After everything is ready and if the app is not running we need to go to the project folder and type: .\.venv\Scripts\Activate.ps1
+to enter the virtula environment
+
+In Plan mode:
+
+4. Add a new button at the top of the window (command bar). This button should be used by the user to initiate a process of AI description generation. The title of this button must be "Generate Description," and when the user clicks it, we use the OpenRouter `Qwen3-VL-235B-A22B` model. Fix a suitable prompt in .env and .env.example so it can be changed if necessary - there is no need for the user to be able to change it manually (for now).
+
+5. Remove the "File" button; instead, position "Open image" directly inside the command bar on the rightmost position. 
+
+In "Plan" mode:
+
+6. The next feature I want to introduce is object detection. For this purpose, we should use the generated description for the current image, the image itself, and a question from the user. The main goal is to offload the detection(decision) to typesafe/jev-1.14
+
+- The pop-up panel should be split so we have 50% for the AI-generated description, and at the bottom, the user can enter a question that is relevant for the object detection. The button initiating this process must be located in the command bar (to the right of the "Generate description" button) and disabled if there is no open image and no generated description.
+
+7. I want to control the models used for description generation and object detection(this is a decision model) through .env - in the example, use the current models as default values.
+
+8. The pop-up panel should be extended even more - under description, the user must be able to enter a modification request. Use an AI model to make edits to the uploaded image.
+This model should be defined in .env and use `meta/muse-image` by default.
+- In the command bar, add a new button with the title `Modify image`.
+- If a user makes edits/modifications once and then wants more corrections, these last corrections must be applied not over the original, but to the current(already edited) image.
+
+9. I want to enhance the description feature a bit, as the user can choose which language to receive the description: English(default), Finnish or Bulgarian. It can be a [EN,FI,BG] dropdown button next to "Generate Description" or you can decide on a better solution.
+
+10. The next feature is that the user must be able to export the modified picture; for this reason, we need:
+- A button "Export image" located in the main panel 
+- The exported picture should be in JPG, JPEG or PNG format let the user decide
+- The new file should be saved in - Create TransImage folder whitin Pictures folder
+
+11. The next feature must be in another pop-up panel  - under description, the user must be able to enter a generate video request. Use an AI model to make a video from the uploaded image + user's instructions + description(optional).
+This model should be defined in .env and use `heygen/heygen-video-1` by default.
+- In the command bar, add a new button with the title `Generate video`.
+- Next to the `Generate video´ button, there must be a `Duration in seconds` input/picker wich will determine the desired duration of the video
+- The video preview must occur in another pop-up window/player.
+- In the video pop-up, there must be a button "Export video" with the same "Save As..." logic as in the "Export image" button.
+- The default format must be MP4
+
